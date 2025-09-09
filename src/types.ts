@@ -143,6 +143,7 @@ export interface OpenAITool {
         name: string
         description?: string
         parameters?: any
+        strict?: boolean
     }
 }
 

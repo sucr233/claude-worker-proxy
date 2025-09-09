@@ -48,7 +48,8 @@ export class impl implements provider.Provider {
                 function: {
                     name: tool.name,
                     description: tool.description,
-                    parameters: utils.cleanJsonSchema(tool.input_schema)
+                    parameters: utils.cleanJsonSchema(tool.input_schema),
+                    strict: true
                 }
             }))
             openaiRequest.tool_choice = "auto"
