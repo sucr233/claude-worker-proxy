@@ -201,3 +201,64 @@ export interface OpenAIStreamResponse {
     model: string
     choices: OpenAIStreamChoice[]
 }
+
+// Responses API 类型定义
+export interface OpenAIResponsesRequest {
+    model: string
+    input: OpenAIMessage[]
+    tools?: OpenAITool[]
+    tool_choice?: string | { type: string; function?: { name: string } }
+    temperature?: number
+    max_tokens?: number  // 保留向后兼容
+    max_completion_tokens?: number  // 新的参数名
+    stream?: boolean
+    reasoning_effort?: string
+    stream_options?: {
+        include_usage?: boolean
+    }
+}
+
+export interface OpenAIResponsesItem {
+    type: 'text' | 'function_call' | 'reasoning'
+    id?: string
+    call_id?: string
+    name?: string
+    arguments?: string
+    content?: string
+    text?: string
+}
+
+export interface OpenAIResponsesOutput {
+    output: OpenAIResponsesItem[]
+    usage?: {
+        prompt_tokens: number
+        completion_tokens: number
+        total_tokens: number
+    }
+}
+
+export interface OpenAIResponsesStreamChoice {
+    index: number
+    delta: {
+        role?: string
+        content?: string
+        tool_calls?: Array<{
+            index: number
+            id?: string
+            type?: 'function'
+            function?: {
+                name?: string
+                arguments?: string
+            }
+        }>
+    }
+    finish_reason?: string | null
+}
+
+export interface OpenAIResponsesStreamResponse {
+    id: string
+    object: string
+    created: number
+    model: string
+    choices: OpenAIResponsesStreamChoice[]
+}
