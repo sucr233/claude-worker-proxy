@@ -110,11 +110,8 @@ export class impl implements provider.Provider {
 
             if (textContents.length > 0 || toolCalls.length > 0) {
                 const openaiMessage: types.OpenAIMessage = {
-                    role: message.role === 'assistant' ? 'assistant' : 'user'
-                }
-
-                if (textContents.length > 0) {
-                    openaiMessage.content = textContents.join('\n')
+                    role: message.role === 'assistant' ? 'assistant' : 'user',
+                    content: textContents.length > 0 ? textContents.join('\n') : null
                 }
 
                 if (toolCalls.length > 0) {
