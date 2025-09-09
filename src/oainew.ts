@@ -5,10 +5,9 @@ import * as utils from './utils'
 export class impl implements provider.Provider {
     async convertToProviderRequest(request: Request, baseUrl: string, apiKey: string): Promise<Request> {
         const claudeRequest = (await request.json()) as types.ClaudeRequest
-        const responsesRequest = this.convertToResponsesRequestBody(claudeRequest)
+        const openaiRequest = this.convertToOpenAIRequestBody(claudeRequest)
 
-        // 使用新的 Responses API 端点
-        const finalUrl = utils.buildUrl(baseUrl, 'v1/responses')
+        const finalUrl = utils.buildUrl(baseUrl, 'chat/completions')
 
         const headers = new Headers(request.headers)
         headers.set('Authorization', `Bearer ${apiKey}`)
@@ -17,46 +16,34 @@ export class impl implements provider.Provider {
         return new Request(finalUrl, {
             method: 'POST',
             headers,
-            body: JSON.stringify(responsesRequest)
+            body: JSON.stringify(openaiRequest)
         })
     }
 
-    async convertToClaudeResponse(responsesResponse: Response): Promise<Response> {
-        if (!responsesResponse.ok) {
-            return responsesResponse
+    async convertToClaudeResponse(openaiResponse: Response): Promise<Response> {
+        if (!openaiResponse.ok) {
+            return openaiResponse
         }
 
-        const contentType = responsesResponse.headers.get('content-type') || ''
+        const contentType = openaiResponse.headers.get('content-type') || ''
         const isStream = contentType.includes('text/event-stream')
 
         if (isStream) {
-            return this.convertStreamResponse(responsesResponse)
+            return this.convertStreamResponse(openaiResponse)
         } else {
-            return this.convertNormalResponse(responsesResponse)
+            return this.convertNormalResponse(openaiResponse)
         }
     }
 
-    private convertToResponsesRequestBody(claudeRequest: types.ClaudeRequest): types.OpenAIResponsesRequest {
-        const responsesRequest: types.OpenAIResponsesRequest = {
+    private convertToOpenAIRequestBody(claudeRequest: types.ClaudeRequest): types.OpenAIRequest {
+        const openaiRequest: types.OpenAIRequest = {
             model: claudeRequest.model,
-            input: this.convertMessages(claudeRequest.messages),
+            messages: this.convertMessages(claudeRequest.messages),
             stream: claudeRequest.stream
         }
 
-        // 添加推理模型参数
-        if (claudeRequest.model.includes('o1') || claudeRequest.model.includes('o3') || claudeRequest.model.includes('gpt-5')) {
-            responsesRequest.reasoning_effort = "medium"
-        }
-
-        // 添加流式选项
-        if (claudeRequest.stream) {
-            responsesRequest.stream_options = {
-                include_usage: true
-            }
-        }
-
         if (claudeRequest.tools && claudeRequest.tools.length > 0) {
-            responsesRequest.tools = claudeRequest.tools.map(tool => ({
+            openaiRequest.tools = claudeRequest.tools.map(tool => ({
                 type: 'function',
                 function: {
                     name: tool.name,
@@ -65,28 +52,21 @@ export class impl implements provider.Provider {
                     strict: true
                 }
             }))
-            responsesRequest.tool_choice = "auto"
+            openaiRequest.tool_choice = "auto"
         }
 
         if (claudeRequest.temperature !== undefined) {
-            // 对于推理模型(gpt-5, o1, o3)，可能有不同的温度处理
-            if (claudeRequest.model.includes('gpt-5')) {
-                // gpt-5可能有不同的温度范围或处理方式
-                responsesRequest.temperature = claudeRequest.temperature
-            } else {
-                responsesRequest.temperature = claudeRequest.temperature
-            }
+            openaiRequest.temperature = claudeRequest.temperature
         }
 
         if (claudeRequest.max_tokens !== undefined) {
-            // 新的Responses API使用 max_completion_tokens 而不是 max_tokens
-            responsesRequest.max_completion_tokens = claudeRequest.max_tokens
+            // 使用 max_completion_tokens 而不是 max_tokens
+            openaiRequest.max_completion_tokens = claudeRequest.max_tokens
         }
 
-        return responsesRequest
+        return openaiRequest
     }
 
-    // 复用原来的消息转换逻辑
     private convertMessages(claudeMessages: types.ClaudeMessage[]): types.OpenAIMessage[] {
         const openaiMessages: types.OpenAIMessage[] = []
         const toolCallMap = new Map<string, string>()
@@ -155,8 +135,8 @@ export class impl implements provider.Provider {
         return openaiMessages
     }
 
-    private async convertNormalResponse(responsesResponse: Response): Promise<Response> {
-        const responsesData = (await responsesResponse.json()) as types.OpenAIResponsesOutput
+    private async convertNormalResponse(openaiResponse: Response): Promise<Response> {
+        const openaiData = (await openaiResponse.json()) as types.OpenAIResponse
 
         const claudeResponse: types.ClaudeResponse = {
             id: utils.generateId(),
@@ -165,59 +145,60 @@ export class impl implements provider.Provider {
             content: []
         }
 
-        if (responsesData.output && responsesData.output.length > 0) {
-            let hasToolUse = false
+        if (openaiData.choices && openaiData.choices.length > 0) {
+            const choice = openaiData.choices[0]
+            const message = choice.message
 
-            for (const item of responsesData.output) {
-                if (item.type === 'text' && item.content) {
-                    claudeResponse.content.push({
-                        type: 'text',
-                        text: item.content
-                    })
-                } else if (item.type === 'function_call') {
-                    hasToolUse = true
-                    claudeResponse.content.push({
-                        type: 'tool_use',
-                        id: item.call_id || utils.generateId(),
-                        name: item.name || '',
-                        input: item.arguments ? JSON.parse(item.arguments) : {}
-                    })
-                }
+            if (message.content) {
+                claudeResponse.content.push({
+                    type: 'text',
+                    text: message.content
+                })
             }
 
-            if (hasToolUse) {
+            if (message.tool_calls) {
+                for (const toolCall of message.tool_calls) {
+                    claudeResponse.content.push({
+                        type: 'tool_use',
+                        id: toolCall.id,
+                        name: toolCall.function.name,
+                        input: JSON.parse(toolCall.function.arguments)
+                    })
+                }
                 claudeResponse.stop_reason = 'tool_use'
+            } else if (choice.finish_reason === 'length') {
+                claudeResponse.stop_reason = 'max_tokens'
             } else {
                 claudeResponse.stop_reason = 'end_turn'
             }
         }
 
-        if (responsesData.usage) {
+        if (openaiData.usage) {
             claudeResponse.usage = {
-                input_tokens: responsesData.usage.prompt_tokens,
-                output_tokens: responsesData.usage.completion_tokens
+                input_tokens: openaiData.usage.prompt_tokens,
+                output_tokens: openaiData.usage.completion_tokens
             }
         }
 
         return new Response(JSON.stringify(claudeResponse), {
-            status: responsesResponse.status,
+            status: openaiResponse.status,
             headers: {
                 'Content-Type': 'application/json'
             }
         })
     }
 
-    private async convertStreamResponse(responsesResponse: Response): Promise<Response> {
-        // 复用原来的流式响应处理逻辑，但适配新的 Responses API 格式
+    private async convertStreamResponse(openaiResponse: Response): Promise<Response> {
+        // 用于累积工具调用数据
         const toolCallAccumulator = new Map<number, { id?: string; name?: string; arguments?: string }>()
         
-        return utils.processProviderStream(responsesResponse, (jsonStr, textBlockIndex, toolUseBlockIndex) => {
-            const responsesData = JSON.parse(jsonStr) as types.OpenAIResponsesStreamResponse
-            if (!responsesData.choices || responsesData.choices.length === 0) {
+        return utils.processProviderStream(openaiResponse, (jsonStr, textBlockIndex, toolUseBlockIndex) => {
+            const openaiData = JSON.parse(jsonStr) as types.OpenAIStreamResponse
+            if (!openaiData.choices || openaiData.choices.length === 0) {
                 return null
             }
 
-            const choice = responsesData.choices[0]
+            const choice = openaiData.choices[0]
             const delta = choice.delta
             const events: string[] = []
             let currentTextIndex = textBlockIndex

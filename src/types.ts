@@ -154,6 +154,7 @@ export interface OpenAIRequest {
     tool_choice?: string | { type: string; function?: { name: string } }
     temperature?: number
     max_tokens?: number
+    max_completion_tokens?: number  // 新的参数支持
     stream?: boolean
 }
 
