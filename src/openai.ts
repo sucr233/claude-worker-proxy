@@ -189,6 +189,9 @@ export class impl implements provider.Provider {
     }
 
     private async convertStreamResponse(openaiResponse: Response): Promise<Response> {
+        // 用于累积工具调用数据
+        const toolCallAccumulator = new Map<number, { id?: string; name?: string; arguments?: string }>()
+        
         return utils.processProviderStream(openaiResponse, (jsonStr, textBlockIndex, toolUseBlockIndex) => {
             const openaiData = JSON.parse(jsonStr) as types.OpenAIStreamResponse
             if (!openaiData.choices || openaiData.choices.length === 0) {
@@ -208,17 +211,44 @@ export class impl implements provider.Provider {
 
             if (delta.tool_calls) {
                 for (const toolCall of delta.tool_calls) {
-                    if (toolCall.function?.name && toolCall.function?.arguments) {
-                        events.push(
-                            ...utils.processToolUsePart(
-                                {
-                                    name: toolCall.function.name,
-                                    args: JSON.parse(toolCall.function.arguments)
-                                },
-                                currentToolIndex
+                    const toolIndex = toolCall.index ?? 0
+                    
+                    // 获取或创建工具调用累积器
+                    if (!toolCallAccumulator.has(toolIndex)) {
+                        toolCallAccumulator.set(toolIndex, {})
+                    }
+                    const accumulated = toolCallAccumulator.get(toolIndex)!
+                    
+                    // 累积数据
+                    if (toolCall.id) {
+                        accumulated.id = toolCall.id
+                    }
+                    if (toolCall.function?.name) {
+                        accumulated.name = toolCall.function.name
+                    }
+                    if (toolCall.function?.arguments) {
+                        accumulated.arguments = (accumulated.arguments || '') + toolCall.function.arguments
+                    }
+                    
+                    // 检查是否收集完整，并且arguments是有效JSON
+                    if (accumulated.name && accumulated.arguments) {
+                        try {
+                            const args = JSON.parse(accumulated.arguments)
+                            events.push(
+                                ...utils.processToolUsePart(
+                                    {
+                                        name: accumulated.name,
+                                        args: args
+                                    },
+                                    currentToolIndex
+                                )
                             )
-                        )
-                        currentToolIndex++
+                            currentToolIndex++
+                            // 清除已处理的工具调用
+                            toolCallAccumulator.delete(toolIndex)
+                        } catch (e) {
+                            // JSON还不完整，继续累积
+                        }
                     }
                 }
             }
