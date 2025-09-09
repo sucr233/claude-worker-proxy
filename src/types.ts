@@ -150,6 +150,7 @@ export interface OpenAIRequest {
     model: string
     messages: OpenAIMessage[]
     tools?: OpenAITool[]
+    tool_choice?: string | { type: string; function?: { name: string } }
     temperature?: number
     max_tokens?: number
     stream?: boolean

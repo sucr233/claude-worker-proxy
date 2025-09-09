@@ -51,6 +51,7 @@ export class impl implements provider.Provider {
                     parameters: utils.cleanJsonSchema(tool.input_schema)
                 }
             }))
+            openaiRequest.tool_choice = "auto"
         }
 
         if (claudeRequest.temperature !== undefined) {
