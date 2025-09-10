@@ -229,13 +229,15 @@ export class impl implements provider.Provider {
                         accumulated.arguments = (accumulated.arguments || '') + toolCall.function.arguments
                     }
                     
-                    // 检查是否收集完整，并且arguments是有效JSON
-                    if (accumulated.name && accumulated.arguments) {
+                    // 检查是否收集完整（包含 id/name/args），并且 arguments 是有效 JSON
+                    // 为了让后续用户的 tool_result 能正确回传给 OpenAI，必须把 OpenAI 返回的 tool_call.id 原样透传给客户端
+                    if (accumulated.id && accumulated.name && accumulated.arguments) {
                         try {
                             const args = JSON.parse(accumulated.arguments)
                             events.push(
                                 ...utils.processToolUsePart(
                                     {
+                                        id: accumulated.id,
                                         name: accumulated.name,
                                         args: args
                                     },

@@ -57,9 +57,14 @@ export function processTextPart(text: string, index: number): string[] {
     return events
 }
 
-export function processToolUsePart(functionCall: { name: string; args: any }, index: number): string[] {
+export function processToolUsePart(
+    functionCall: { name: string; args: any; id?: string },
+    index: number
+): string[] {
     const events: string[] = []
-    const toolUseId = generateId()
+    // If upstream provided a stable id (e.g., OpenAI tool_call.id), use it;
+    // otherwise generate one for providers that don't expose ids (e.g., Gemini).
+    const toolUseId = functionCall.id || generateId()
 
     events.push(
         `event: content_block_start\ndata: ${JSON.stringify({
@@ -78,10 +83,10 @@ export function processToolUsePart(functionCall: { name: string; args: any }, in
         `event: content_block_delta\ndata: ${JSON.stringify({
             type: 'content_block_delta',
             index,
-            delta: {
-                type: 'input_json_delta',
-                partial_json: JSON.stringify(functionCall.args)
-            }
+                delta: {
+                    type: 'input_json_delta',
+                    partial_json: JSON.stringify(functionCall.args)
+                }
         })}\n\n`
     )
 
