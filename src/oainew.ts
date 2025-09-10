@@ -58,6 +58,7 @@ export class impl implements provider.Provider {
         }
 
         if (claudeRequest.tools && claudeRequest.tools.length > 0) {
+            // New-style tools
             openaiRequest.tools = claudeRequest.tools.map(tool => ({
                 type: 'function',
                 function: {
@@ -68,6 +69,15 @@ export class impl implements provider.Provider {
                 }
             }))
             openaiRequest.tool_choice = "auto"
+
+            // Legacy compatibility for providers still expecting `functions`/`function_call`
+            const legacyFunctions = claudeRequest.tools.map(tool => ({
+                name: tool.name,
+                description: tool.description,
+                parameters: utils.cleanJsonSchema(tool.input_schema)
+            }))
+            ;(openaiRequest as any).functions = legacyFunctions
+            ;(openaiRequest as any).function_call = 'auto'
         }
 
         if (claudeRequest.temperature !== undefined) {
@@ -75,8 +85,9 @@ export class impl implements provider.Provider {
         }
 
         if (claudeRequest.max_tokens !== undefined) {
-            // 使用新版字段以兼容 o4 系列及新接口行为
+            // 同时设置两种字段，最大化兼容性（部分提供方仍需 max_tokens）
             openaiRequest.max_completion_tokens = claudeRequest.max_tokens
+            ;(openaiRequest as any).max_tokens = claudeRequest.max_tokens
         }
 
         return openaiRequest
