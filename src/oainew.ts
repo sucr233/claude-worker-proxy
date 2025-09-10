@@ -68,6 +68,15 @@ export class impl implements provider.Provider {
                 }
             }))
             openaiRequest.tool_choice = "auto"
+
+            // Legacy compatibility for some OpenAI-compatible providers
+            const legacyFunctions = claudeRequest.tools.map(tool => ({
+                name: tool.name,
+                description: tool.description,
+                parameters: utils.cleanJsonSchema(tool.input_schema)
+            }))
+            ;(openaiRequest as any).functions = legacyFunctions
+            ;(openaiRequest as any).function_call = 'auto'
         }
 
         if (claudeRequest.temperature !== undefined) {
