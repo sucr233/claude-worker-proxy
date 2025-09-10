@@ -1,20 +1,43 @@
 import * as provider from './provider'
 import * as types from './types'
 import * as utils from './utils'
+import * as oainew from './oainew'
 
 // A simple echo provider that returns the original request body
 export class impl implements provider.Provider {
-    async convertToProviderRequest(request: Request, _baseUrl: string, _apiKey: string): Promise<Request> {
-        // Read the raw request body text exactly as sent
-        const rawBody = await request.text()
+    private rawBody: string | undefined
 
-        // Use a data URL so fetch() returns a Response with this exact text
-        const dataUrl = `data:text/plain;charset=utf-8,${encodeURIComponent(rawBody)}`
-        return new Request(dataUrl, { method: 'GET' })
+    async convertToProviderRequest(request: Request, baseUrl: string, apiKey: string): Promise<Request> {
+        // Capture the exact original body for echo
+        this.rawBody = await request.text()
+
+        // Try to forward via oainew, forcing non-stream for easier aggregation
+        try {
+            const parsed = JSON.parse(this.rawBody)
+            const forwardedBody = { ...parsed, stream: false }
+            const modReq = new Request(request, {
+                method: 'POST',
+                headers: request.headers,
+                body: JSON.stringify(forwardedBody)
+            })
+            const forwarder = new oainew.impl()
+            return await forwarder.convertToProviderRequest(modReq, baseUrl, apiKey)
+        } catch {
+            // Fallback: pass through to oainew with original request if body isn't JSON
+            const forwarder = new oainew.impl()
+            const passthroughReq = new Request(request, { method: 'POST', headers: request.headers, body: this.rawBody })
+            return await forwarder.convertToProviderRequest(passthroughReq, baseUrl, apiKey)
+        }
     }
 
     async convertToClaudeResponse(providerResponse: Response): Promise<Response> {
-        const originalText = await providerResponse.text()
+        // Convert provider response to Claude style using oainew
+        const forwarder = new oainew.impl()
+        const converted = await forwarder.convertToClaudeResponse(providerResponse)
+        const convertedText = await converted.text()
+
+        const separator = '==='.repeat(10) // 10*===
+        const combined = `${this.rawBody ?? ''}\n${separator}\n${convertedText}`
 
         const claudeResponse: types.ClaudeResponse = {
             id: utils.generateId(),
@@ -23,7 +46,7 @@ export class impl implements provider.Provider {
             content: [
                 {
                     type: 'text',
-                    text: originalText
+                    text: combined
                 }
             ],
             stop_reason: 'end_turn'
@@ -35,4 +58,3 @@ export class impl implements provider.Provider {
         })
     }
 }
-
