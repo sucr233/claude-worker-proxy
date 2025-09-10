@@ -27,6 +27,9 @@ export interface ClaudeMessage {
 
 export interface ClaudeRequest {
     model: string
+    // Claude v1/messages supports a top-level system prompt. Some clients (e.g., Claude Code)
+    // rely on this to instruct the model to use tools. We surface it so providers can forward it.
+    system?: string
     messages: ClaudeMessage[]
     max_tokens?: number
     temperature?: number

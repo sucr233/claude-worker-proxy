@@ -35,10 +35,24 @@ export class impl implements provider.Provider {
         }
     }
 
+    // 兼容各种来源的 role 值（如 'tools'、'system' 等）
+    private normalizeClaudeRole(role: any): 'system' | 'user' | 'assistant' | 'tool' {
+        const r = String(role ?? '').toLowerCase()
+        if (r === 'assistant') return 'assistant'
+        if (r === 'system') return 'system'
+        if (r === 'tool' || r === 'tools') return 'tool'
+        return 'user'
+    }
+
     private convertToOpenAIRequestBody(claudeRequest: types.ClaudeRequest): types.OpenAIRequest {
+        const convertedMessages = this.convertMessages(claudeRequest.messages)
+        const messages: types.OpenAIMessage[] = claudeRequest.system
+            ? [{ role: 'system', content: claudeRequest.system }, ...convertedMessages]
+            : convertedMessages
+
         const openaiRequest: types.OpenAIRequest = {
             model: claudeRequest.model,
-            messages: this.convertMessages(claudeRequest.messages),
+            messages,
             stream: claudeRequest.stream
         }
 
@@ -60,7 +74,7 @@ export class impl implements provider.Provider {
         }
 
         if (claudeRequest.max_tokens !== undefined) {
-            // 使用 max_completion_tokens 而不是 max_tokens
+            // 使用新版字段以兼容 o4 系列及新接口行为
             openaiRequest.max_completion_tokens = claudeRequest.max_tokens
         }
 
@@ -72,11 +86,15 @@ export class impl implements provider.Provider {
         const toolCallMap = new Map<string, string>()
 
         for (const message of claudeMessages) {
+            const normalizedRole = this.normalizeClaudeRole((message as any).role)
             if (typeof message.content === 'string') {
-                openaiMessages.push({
-                    role: message.role === 'assistant' ? 'assistant' : 'user',
-                    content: message.content
-                })
+                // 纯文本消息：支持 system/user/assistant；tool 角色的纯文本忽略
+                if (normalizedRole !== 'tool') {
+                    openaiMessages.push({
+                        role: normalizedRole,
+                        content: message.content
+                    })
+                }
                 continue
             }
 
@@ -110,9 +128,9 @@ export class impl implements provider.Provider {
                 }
             }
 
-            if (textContents.length > 0 || toolCalls.length > 0) {
+            if ((textContents.length > 0 || toolCalls.length > 0) && normalizedRole !== 'tool') {
                 const openaiMessage: types.OpenAIMessage = {
-                    role: message.role === 'assistant' ? 'assistant' : 'user',
+                    role: normalizedRole === 'assistant' ? 'assistant' : normalizedRole === 'system' ? 'system' : 'user',
                     content: textContents.length > 0 ? textContents.join('\n') : null
                 }
 
@@ -243,6 +261,14 @@ export class impl implements provider.Provider {
                                     },
                                     currentToolIndex
                                 )
+                            )
+                            // 通知客户端该轮以 tool_use 结束，便于立刻触发工具执行
+                            events.push(
+                                `event: message_delta\n` +
+                                    `data: ${JSON.stringify({
+                                        type: 'message_delta',
+                                        delta: { stop_reason: 'tool_use' }
+                                    })}\n\n`
                             )
                             currentToolIndex++
                             // 清除已处理的工具调用
