@@ -2,6 +2,7 @@ import * as provider from './provider'
 import * as gemini from './gemini'
 import * as openai from './openai'
 import * as oainew from './oainew'
+import * as test from './test'
 
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -43,6 +44,9 @@ async function handle(request: Request): Promise<Response> {
             break
         case 'oainew':
             provider = new oainew.impl()
+            break
+        case 'test':
+            provider = new test.impl()
             break
         default:
             return new Response('Unsupported type', { status: 400 })
