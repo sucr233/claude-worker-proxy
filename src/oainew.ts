@@ -5,9 +5,10 @@ import * as utils from './utils'
 export class impl implements provider.Provider {
     async convertToProviderRequest(request: Request, baseUrl: string, apiKey: string): Promise<Request> {
         const claudeRequest = (await request.json()) as types.ClaudeRequest
-        const openaiRequest = this.convertToOpenAIRequestBody(claudeRequest)
+        const responsesRequest = this.convertToResponsesRequestBody(claudeRequest)
 
-        const finalUrl = utils.buildUrl(baseUrl, 'chat/completions')
+        // Use the new Responses API for o4 family and newer
+        const finalUrl = utils.buildUrl(baseUrl, 'responses')
 
         const headers = new Headers(request.headers)
         headers.set('Authorization', `Bearer ${apiKey}`)
@@ -16,7 +17,7 @@ export class impl implements provider.Provider {
         return new Request(finalUrl, {
             method: 'POST',
             headers,
-            body: JSON.stringify(openaiRequest)
+            body: JSON.stringify(responsesRequest)
         })
     }
 
@@ -44,22 +45,21 @@ export class impl implements provider.Provider {
         return 'user'
     }
 
-    private convertToOpenAIRequestBody(claudeRequest: types.ClaudeRequest): types.OpenAIRequest {
+    private convertToResponsesRequestBody(claudeRequest: types.ClaudeRequest): types.OpenAIResponsesRequest {
         const convertedMessages = this.convertMessages(claudeRequest.messages)
         const systemText = this.extractSystemText((claudeRequest as any).system)
         const messages: types.OpenAIMessage[] = systemText
             ? [{ role: 'system', content: systemText }, ...convertedMessages]
             : convertedMessages
 
-        const openaiRequest: types.OpenAIRequest = {
+        const req: types.OpenAIResponsesRequest = {
             model: claudeRequest.model,
-            messages,
+            input: messages,
             stream: claudeRequest.stream
         }
 
         if (claudeRequest.tools && claudeRequest.tools.length > 0) {
-            // Use tools schema only (no legacy functions/function_call)
-            openaiRequest.tools = claudeRequest.tools.map(tool => ({
+            req.tools = claudeRequest.tools.map(tool => ({
                 type: 'function',
                 function: {
                     name: tool.name,
@@ -67,19 +67,24 @@ export class impl implements provider.Provider {
                     parameters: utils.cleanJsonSchema(tool.input_schema)
                 }
             }))
-            openaiRequest.tool_choice = "auto"
+            req.tool_choice = 'auto'
         }
 
         if (claudeRequest.temperature !== undefined) {
-            openaiRequest.temperature = claudeRequest.temperature
+            req.temperature = claudeRequest.temperature
         }
 
         if (claudeRequest.max_tokens !== undefined) {
-            // Only use max_completion_tokens for oainew path
-            openaiRequest.max_completion_tokens = claudeRequest.max_tokens
+            // oainew uses the new field
+            req.max_completion_tokens = claudeRequest.max_tokens
         }
 
-        return openaiRequest
+        // Some providers support stream options in Responses API
+        if (claudeRequest.stream) {
+            ;(req as any).stream_options = { include_usage: true }
+        }
+
+        return req
     }
 
     // 支持 Claude 顶层 system 为 string 或 content[]（含 {type:'text'} 块）
@@ -172,7 +177,7 @@ export class impl implements provider.Provider {
     }
 
     private async convertNormalResponse(openaiResponse: Response): Promise<Response> {
-        const openaiData = (await openaiResponse.json()) as types.OpenAIResponse
+        const json = await openaiResponse.json()
 
         const claudeResponse: types.ClaudeResponse = {
             id: utils.generateId(),
@@ -181,38 +186,73 @@ export class impl implements provider.Provider {
             content: []
         }
 
-        if (openaiData.choices && openaiData.choices.length > 0) {
-            const choice = openaiData.choices[0]
-            const message = choice.message
-
-            if (message.content) {
-                claudeResponse.content.push({
-                    type: 'text',
-                    text: message.content
-                })
-            }
-
-            if (message.tool_calls) {
-                for (const toolCall of message.tool_calls) {
+        // Handle Responses API shape: { output: [...], usage? }
+        if (Array.isArray((json as any).output)) {
+            const out = json as types.OpenAIResponsesOutput
+            let hasToolUse = false
+            for (const item of out.output) {
+                if (item.type === 'text') {
+                    const text = item.text ?? item.content ?? ''
+                    if (text) {
+                        claudeResponse.content.push({ type: 'text', text })
+                    }
+                } else if (item.type === 'function_call') {
+                    hasToolUse = true
+                    let args: any = {}
+                    if (item.arguments) {
+                        try { args = typeof item.arguments === 'string' ? JSON.parse(item.arguments) : item.arguments } catch {}
+                    }
                     claudeResponse.content.push({
                         type: 'tool_use',
-                        id: toolCall.id,
-                        name: toolCall.function.name,
-                        input: JSON.parse(toolCall.function.arguments)
+                        id: item.id || item.call_id || utils.generateId(),
+                        name: item.name || '',
+                        input: args
                     })
                 }
+            }
+            if (hasToolUse) {
                 claudeResponse.stop_reason = 'tool_use'
-            } else if (choice.finish_reason === 'length') {
-                claudeResponse.stop_reason = 'max_tokens'
             } else {
                 claudeResponse.stop_reason = 'end_turn'
             }
-        }
+            if (out.usage) {
+                claudeResponse.usage = {
+                    input_tokens: out.usage.prompt_tokens,
+                    output_tokens: out.usage.completion_tokens
+                }
+            }
+        } else if (Array.isArray((json as any).choices)) {
+            // Fallback: Chat Completions shape
+            const openaiData = json as types.OpenAIResponse
+            if (openaiData.choices && openaiData.choices.length > 0) {
+                const choice = openaiData.choices[0]
+                const message = choice.message
 
-        if (openaiData.usage) {
-            claudeResponse.usage = {
-                input_tokens: openaiData.usage.prompt_tokens,
-                output_tokens: openaiData.usage.completion_tokens
+                if (message.content) {
+                    claudeResponse.content.push({ type: 'text', text: message.content })
+                }
+
+                if (message.tool_calls) {
+                    for (const toolCall of message.tool_calls) {
+                        claudeResponse.content.push({
+                            type: 'tool_use',
+                            id: toolCall.id,
+                            name: toolCall.function.name,
+                            input: JSON.parse(toolCall.function.arguments)
+                        })
+                    }
+                    claudeResponse.stop_reason = 'tool_use'
+                } else if (choice.finish_reason === 'length') {
+                    claudeResponse.stop_reason = 'max_tokens'
+                } else {
+                    claudeResponse.stop_reason = 'end_turn'
+                }
+            }
+            if (openaiData.usage) {
+                claudeResponse.usage = {
+                    input_tokens: openaiData.usage.prompt_tokens,
+                    output_tokens: openaiData.usage.completion_tokens
+                }
             }
         }
 
