@@ -46,8 +46,9 @@ export class impl implements provider.Provider {
 
     private convertToOpenAIRequestBody(claudeRequest: types.ClaudeRequest): types.OpenAIRequest {
         const converted = this.convertMessages(claudeRequest.messages)
-        const messages: types.OpenAIMessage[] = claudeRequest.system
-            ? [{ role: 'system', content: claudeRequest.system }, ...converted]
+        const systemText = this.extractSystemText((claudeRequest as any).system)
+        const messages: types.OpenAIMessage[] = systemText
+            ? [{ role: 'system', content: systemText }, ...converted]
             : converted
 
         const openaiRequest: types.OpenAIRequest = {
@@ -126,6 +127,15 @@ export class impl implements provider.Provider {
                 }
             }
 
+            // 先推送 tool_result，确保紧跟上一次 assistant 的 tool_calls，避免被用户文本打断
+            for (const toolResult of toolResults) {
+                openaiMessages.push({
+                    role: 'tool',
+                    tool_call_id: toolResult.tool_call_id,
+                    content: toolResult.content
+                })
+            }
+
             if ((textContents.length > 0 || toolCalls.length > 0) && normalizedRole !== 'tool') {
                 const openaiMessage: types.OpenAIMessage = {
                     role: normalizedRole === 'assistant' ? 'assistant' : normalizedRole === 'system' ? 'system' : 'user',
@@ -138,17 +148,24 @@ export class impl implements provider.Provider {
 
                 openaiMessages.push(openaiMessage)
             }
-
-            for (const toolResult of toolResults) {
-                openaiMessages.push({
-                    role: 'tool',
-                    tool_call_id: toolResult.tool_call_id,
-                    content: toolResult.content
-                })
-            }
         }
 
         return openaiMessages
+    }
+
+    // 支持 Claude 顶层 system 为 string 或 content[]（含 {type:'text'} 块）
+    private extractSystemText(systemField: any): string | undefined {
+        if (!systemField) return undefined
+        if (typeof systemField === 'string') return systemField
+        const arr = Array.isArray(systemField) ? systemField : [systemField]
+        const parts: string[] = []
+        for (const item of arr) {
+            if (item && typeof item === 'object' && item.type === 'text' && typeof item.text === 'string') {
+                parts.push(item.text)
+            }
+        }
+        if (parts.length === 0) return undefined
+        return parts.join('\n')
     }
 
     private async convertNormalResponse(openaiResponse: Response): Promise<Response> {

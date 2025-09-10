@@ -46,8 +46,9 @@ export class impl implements provider.Provider {
 
     private convertToOpenAIRequestBody(claudeRequest: types.ClaudeRequest): types.OpenAIRequest {
         const convertedMessages = this.convertMessages(claudeRequest.messages)
-        const messages: types.OpenAIMessage[] = claudeRequest.system
-            ? [{ role: 'system', content: claudeRequest.system }, ...convertedMessages]
+        const systemText = this.extractSystemText((claudeRequest as any).system)
+        const messages: types.OpenAIMessage[] = systemText
+            ? [{ role: 'system', content: systemText }, ...convertedMessages]
             : convertedMessages
 
         const openaiRequest: types.OpenAIRequest = {
@@ -79,6 +80,22 @@ export class impl implements provider.Provider {
         }
 
         return openaiRequest
+    }
+
+    // 支持 Claude 顶层 system 为 string 或 content[]（含 {type:'text'} 块）
+    private extractSystemText(systemField: any): string | undefined {
+        if (!systemField) return undefined
+        if (typeof systemField === 'string') return systemField
+        // 可能是单个对象或数组
+        const arr = Array.isArray(systemField) ? systemField : [systemField]
+        const parts: string[] = []
+        for (const item of arr) {
+            if (item && typeof item === 'object' && item.type === 'text' && typeof item.text === 'string') {
+                parts.push(item.text)
+            }
+        }
+        if (parts.length === 0) return undefined
+        return parts.join('\n')
     }
 
     private convertMessages(claudeMessages: types.ClaudeMessage[]): types.OpenAIMessage[] {
@@ -128,6 +145,15 @@ export class impl implements provider.Provider {
                 }
             }
 
+            // 优先推送 tool_result，确保紧跟在上一次 assistant 的 tool_calls 之后
+            for (const toolResult of toolResults) {
+                openaiMessages.push({
+                    role: 'tool',
+                    tool_call_id: toolResult.tool_call_id,
+                    content: toolResult.content
+                })
+            }
+
             if ((textContents.length > 0 || toolCalls.length > 0) && normalizedRole !== 'tool') {
                 const openaiMessage: types.OpenAIMessage = {
                     role: normalizedRole === 'assistant' ? 'assistant' : normalizedRole === 'system' ? 'system' : 'user',
@@ -139,14 +165,6 @@ export class impl implements provider.Provider {
                 }
 
                 openaiMessages.push(openaiMessage)
-            }
-
-            for (const toolResult of toolResults) {
-                openaiMessages.push({
-                    role: 'tool',
-                    tool_call_id: toolResult.tool_call_id,
-                    content: toolResult.content
-                })
             }
         }
 
