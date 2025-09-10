@@ -1,0 +1,224 @@
+以下是一些演示各种工具使用模式和技术的代码示例。为了简洁起见，工具是简单的工具，工具描述比确保最佳性能的理想长度要短。
+
+
+单个工具示例
+
+
+Shell
+
+Python
+
+Java
+
+Copy
+curl https://api.anthropic.com/v1/messages \
+     --header "x-api-key: $ANTHROPIC_API_KEY" \
+     --header "anthropic-version: 2023-06-01" \
+     --header "content-type: application/json" \
+     --data \
+'{
+    "model": "claude-opus-4-20250514",
+    "max_tokens": 1024,
+    "tools": [{
+        "name": "get_weather",
+        "description": "Get the current weather in a given location",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "location": {
+                    "type": "string",
+                    "description": "The city and state, e.g. San Francisco, CA"
+                },
+                "unit": {
+                    "type": "string",
+                    "enum": ["celsius", "fahrenheit"],
+                    "description": "The unit of temperature, either \"celsius\" or \"fahrenheit\""
+                }
+            },
+            "required": ["location"]
+        }
+    }],
+    "messages": [{"role": "user", "content": "What is the weather like in San Francisco?"}]
+}'
+Claude 将返回类似于以下的响应：
+
+JSON
+
+Copy
+{
+  "id": "msg_01Aq9w938a90dw8q",
+  "model": "claude-opus-4-20250514",
+  "stop_reason": "tool_use",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "<thinking>I need to call the get_weather function, and the user wants SF, which is likely San Francisco, CA.</thinking>"
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_01A09q90qw90lq917835lq9",
+      "name": "get_weather",
+      "input": {"location": "San Francisco, CA", "unit": "celsius"}
+    }
+  ]
+}
+然后您需要使用提供的输入执行 get_weather 函数，并在新的 user 消息中返回结果：
+
+
+Shell
+
+Python
+
+Java
+
+Copy
+curl https://api.anthropic.com/v1/messages \
+     --header "x-api-key: $ANTHROPIC_API_KEY" \
+     --header "anthropic-version: 2023-06-01" \
+     --header "content-type: application/json" \
+     --data \
+'{
+    "model": "claude-opus-4-20250514",
+    "max_tokens": 1024,
+    "tools": [
+        {
+            "name": "get_weather",
+            "description": "Get the current weather in a given location",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA"
+                    },
+                    "unit": {
+                        "type": "string",
+                        "enum": ["celsius", "fahrenheit"],
+                        "description": "The unit of temperature, either \"celsius\" or \"fahrenheit\""
+                    }
+                },
+                "required": ["location"]
+            }
+        }
+    ],
+    "messages": [
+        {
+            "role": "user",
+            "content": "What is the weather like in San Francisco?"
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "<thinking>I need to use get_weather, and the user wants SF, which is likely San Francisco, CA.</thinking>"
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01A09q90qw90lq917835lq9",
+                    "name": "get_weather",
+                    "input": {
+                        "location": "San Francisco, CA",
+                        "unit": "celsius"
+                    }
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01A09q90qw90lq917835lq9",
+                    "content": "15 degrees"
+                }
+            ]
+        }
+    ]
+}'
+这将打印 Claude 的最终响应，其中包含天气数据：
+
+JSON
+
+Copy
+{
+  "id": "msg_01Aq9w938a90dw8q",
+  "model": "claude-opus-4-20250514",
+  "stop_reason": "stop_sequence",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "The current weather in San Francisco is 15 degrees Celsius (59 degrees Fahrenheit). It's a cool day in the city by the bay!"
+    }
+  ]
+}
+
+Claude 可以在单个响应中并行调用多个工具，这对于需要多个独立操作的任务很有用。使用并行工具时，所有 tool_use 块都包含在单个助手消息中，所有相应的 tool_result 块必须在后续用户消息中提供。
+
+重要：工具结果必须格式正确以避免 API 错误并确保 Claude 继续使用并行工具。有关详细的格式要求和完整代码示例，请参阅我们的实现指南。
+
+有关实现并行工具调用的全面示例、测试脚本和最佳实践，请参阅我们实现指南中的并行工具使用部分。
+
+您可以在单个请求中为 Claude 提供多个工具供其选择。以下是一个包含 get_weather 和 get_time 工具的示例，以及一个同时询问两者的用户查询。
+
+
+Shell
+
+Python
+
+Java
+
+Copy
+curl https://api.anthropic.com/v1/messages \
+     --header "x-api-key: $ANTHROPIC_API_KEY" \
+     --header "anthropic-version: 2023-06-01" \
+     --header "content-type: application/json" \
+     --data \
+'{
+    "model": "claude-opus-4-20250514",
+    "max_tokens": 1024,
+    "tools": [{
+        "name": "get_weather",
+        "description": "Get the current weather in a given location",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "location": {
+                    "type": "string",
+                    "description": "The city and state, e.g. San Francisco, CA"
+                },
+                "unit": {
+                    "type": "string",
+                    "enum": ["celsius", "fahrenheit"],
+                    "description": "The unit of temperature, either 'celsius' or 'fahrenheit'"
+                }
+            },
+            "required": ["location"]
+        }
+    },
+    {
+        "name": "get_time",
+        "description": "Get the current time in a given time zone",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "timezone": {
+                    "type": "string",
+                    "description": "The IANA time zone name, e.g. America/Los_Angeles"
+                }
+            },
+            "required": ["timezone"]
+        }
+    }],
+    "messages": [{
+        "role": "user",
+        "content": "What is the weather like right now in New York? Also what time is it there?"
+    }]
+}'
+在这种情况下，Claude 可能会：
+
+按顺序使用工具（一次一个）——先调用 get_weather，然后在收到天气结果后调用 get_time
+使用并行工具调用——当操作是独立的时，在单个响应中输出多个 tool_use 块
+当 Claude 进行并行工具调用时，您必须在单个 user 消息中返回所有工具结果，每个结果都在其自己的 tool_result 块中。

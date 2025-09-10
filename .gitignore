@@ -211,5 +211,3 @@ vite.config.ts.timestamp-*
 docs/
 .claude/
 CLAUDE.md
-log.txt
-ref.txt
