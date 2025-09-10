@@ -229,6 +229,8 @@ export class impl implements provider.Provider {
     private async convertStreamResponse(openaiResponse: Response): Promise<Response> {
         // 用于累积工具调用数据
         const toolCallAccumulator = new Map<number, { id?: string; name?: string; arguments?: string }>()
+        // 仅在确认 OpenAI 本轮以 tool_calls 结束时，向下游发送一次 stop_reason=tool_use
+        let toolUseStopEmitted = false
         
         return utils.processProviderStream(openaiResponse, (jsonStr, textBlockIndex, toolUseBlockIndex) => {
             const openaiData = JSON.parse(jsonStr) as types.OpenAIStreamResponse
@@ -282,14 +284,6 @@ export class impl implements provider.Provider {
                                     currentToolIndex
                                 )
                             )
-                            // 通知客户端该轮以 tool_use 结束，便于立刻触发工具执行
-                            events.push(
-                                `event: message_delta\n` +
-                                    `data: ${JSON.stringify({
-                                        type: 'message_delta',
-                                        delta: { stop_reason: 'tool_use' }
-                                    })}\n\n`
-                            )
                             currentToolIndex++
                             // 清除已处理的工具调用
                             toolCallAccumulator.delete(toolIndex)
@@ -298,6 +292,18 @@ export class impl implements provider.Provider {
                         }
                     }
                 }
+            }
+
+            // 仅当 OpenAI 明确以 tool_calls 结束时，再发送一次 stop_reason=tool_use，避免并行多工具时提前结束
+            if (!toolUseStopEmitted && (choice.finish_reason === 'tool_calls' || choice.finish_reason === 'function_call')) {
+                events.push(
+                    `event: message_delta\n` +
+                        `data: ${JSON.stringify({
+                            type: 'message_delta',
+                            delta: { stop_reason: 'tool_use' }
+                        })}\n\n`
+                )
+                toolUseStopEmitted = true
             }
 
             return {
